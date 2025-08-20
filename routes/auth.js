@@ -1,98 +1,53 @@
-const express = require('express');
-const jwt = require('jsonwebtoken');
-const { body, validationResult } = require('express-validator');
-const Parent = require('../models/Parent');
+const express = require("express");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
+const Auth = require("../models/Auth");
+const User = require("../models/User");
 
 const router = express.Router();
+const SECRET = "supersecret"; // ⚠️ put in env file later
 
 // Register
-router.post('/register', [
-  body('email').isEmail().normalizeEmail(),
-  body('password').isLength({ min: 6 }),
-  body('firstName').notEmpty().trim(),
-  body('lastName').notEmpty().trim()
-], async (req, res) => {
+router.post("/register", async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
+    const { email, password, full_name } = req.body;
 
-    const { email, password, firstName, lastName, phone } = req.body;
+    const hashed = await bcrypt.hash(password, 10);
 
-    // Check if parent already exists
-    const existingParent = await Parent.findOne({ email });
-    if (existingParent) {
-      return res.status(400).json({ message: 'Parent already exists with this email' });
-    }
-
-    // Create new parent
-    const parent = new Parent({
+    const auth = await Auth.create({
       email,
-      password,
-      firstName,
-      lastName,
-      phone
+      password: hashed,
+      isVerified: true
     });
 
-    await parent.save();
-
-    // Generate token
-    const token = jwt.sign({ id: parent._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
-
-    res.status(201).json({
-      token,
-      parent: {
-        id: parent._id,
-        email: parent.email,
-        firstName: parent.firstName,
-        lastName: parent.lastName
-      }
+    const user = await User.create({
+      auth_id: auth._id,
+      full_name,
+      parent_id: null // means this is a parent
     });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+
+    res.json({ auth, user });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
 // Login
-router.post('/login', [
-  body('email').isEmail().normalizeEmail(),
-  body('password').notEmpty()
-], async (req, res) => {
+router.post("/login", async (req, res) => {
   try {
-    const errors = validationResult(req);
-    if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
-    }
-
     const { email, password } = req.body;
+    const auth = await Auth.findOne({ email });
 
-    // Find parent
-    const parent = await Parent.findOne({ email });
-    if (!parent) {
-      return res.status(400).json({ message: 'Invalid credentials' });
-    }
+    if (!auth) return res.status(404).json({ error: "User not found" });
 
-    // Check password
-    const isMatch = await parent.comparePassword(password);
-    if (!isMatch) {
-      return res.status(400).json({ message: 'Invalid credentials' });
-    }
+    const valid = await bcrypt.compare(password, auth.password);
+    if (!valid) return res.status(401).json({ error: "Invalid password" });
 
-    // Generate token
-    const token = jwt.sign({ id: parent._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ authId: auth._id }, SECRET, { expiresIn: "7d" });
 
-    res.json({
-      token,
-      parent: {
-        id: parent._id,
-        email: parent.email,
-        firstName: parent.firstName,
-        lastName: parent.lastName
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ message: error.message });
+    res.json({ token, authId: auth._id });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
